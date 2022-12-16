@@ -28,9 +28,8 @@ type (
 )
 
 var DefaultOptions = &Options{
-	Timeout: time.Second, // don't block indefinitely if the db isn't closed
-	// if updates get slower, enable this again
-	NoFreelistSync: false, // improves write performance, slow load if the db isn't closed cleanly, disabling to speed booting up
+	Timeout:        time.Second, // don't block indefinitely if the db isn't closed
+	NoFreelistSync: true,        // improves write performance, slow load if the db isn't closed cleanly
 	NoGrowSync:     false,
 	FreelistType:   bbolt.FreelistMapType,
 
