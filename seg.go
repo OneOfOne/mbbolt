@@ -5,6 +5,7 @@ import (
 	"hash/fnv"
 	"io"
 	"log"
+	"sync"
 
 	"go.oneofone.dev/genh"
 	"go.oneofone.dev/otk"
@@ -31,14 +32,20 @@ func NewSegDB(prefix, ext string, opts *Options, numSegments int) *SegDB {
 		SegmentFn: DefaultSegmentByKey,
 	}
 
+	var wg sync.WaitGroup
+	wg.Add(numSegments)
 	for i := 0; i < numSegments; i++ {
-		name := fmt.Sprintf("%06d", i)
-		db := seg.mdb.MustGet(name, opts)
-		if opts == nil || opts.MarshalFn == nil {
-			db.SetMarshaler(genh.MarshalMsgpack, genh.UnmarshalMsgpack)
-		}
-		seg.dbs[i] = db
+		i, name := i, fmt.Sprintf("%06d", i)
+		go func() {
+			defer wg.Done()
+			db := seg.mdb.MustGet(name, opts)
+			if opts == nil || opts.MarshalFn == nil {
+				db.SetMarshaler(genh.MarshalMsgpack, genh.UnmarshalMsgpack)
+			}
+			seg.dbs[i] = db
+		}()
 	}
+	wg.Wait()
 	return seg
 }
 
