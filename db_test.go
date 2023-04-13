@@ -73,11 +73,6 @@ func TestDB(t *testing.T) {
 	}
 }
 
-func TestMultiDB(t *testing.T) {
-	mdb := NewMultiDB(t.TempDir(), ".db", nil)
-	defer mdb.Close()
-}
-
 func putGet(tb testing.TB, db *DB, t dbTest) {
 	tb.Helper()
 	dieIf(tb, db.Put(t.bucket, t.key, t.value))

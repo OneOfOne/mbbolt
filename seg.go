@@ -1,10 +1,13 @@
 package mbbolt
 
 import (
+	"archive/zip"
 	"fmt"
 	"hash/fnv"
 	"io"
 	"log"
+	"os"
+	"strings"
 	"sync"
 
 	"go.oneofone.dev/genh"
@@ -47,6 +50,29 @@ func NewSegDB(prefix, ext string, opts *Options, numSegments int) *SegDB {
 	}
 	wg.Wait()
 	return seg
+}
+
+func NewSegDBFromFile(fp, prefix, ext string, opts *Options) (_ *SegDB, err error) {
+	var f *os.File
+	if f, err = os.Open(fp); err != nil {
+		return
+	}
+	defer f.Close()
+	var segs int
+	if err = otk.Unzip(f, prefix, func(fp string, f *zip.File) bool {
+		if strings.HasSuffix(fp, ext) {
+			segs++
+			return true
+		}
+		return false
+	}); err != nil {
+		return
+	}
+	if segs == 0 {
+		err = fmt.Errorf("no files found")
+		return
+	}
+	return NewSegDB(prefix, ext, opts, segs), nil
 }
 
 type SegDB struct {
@@ -117,11 +143,31 @@ func (s *SegDB) Backup(w io.Writer) (int64, error) {
 	return s.mdb.Backup(w, nil)
 }
 
+func (s *SegDB) RestoreFromFile(fp string) error {
+	return s.mdb.RestoreFromFile(fp)
+}
+
+func (s *SegDB) Restore(r io.ReaderAt) error {
+	return s.mdb.Restore(r)
+}
+
 func (s *SegDB) UseBatch(v bool) (old bool) {
 	for _, db := range s.dbs {
 		old = db.UseBatch(v)
 	}
 	return
+}
+
+func SegDBUpdateOne[T any](s *SegDB, bucket, key string, fn func(v T) (T, error)) error {
+	db := s.db(key)
+	return db.Update(func(tx *Tx) (err error) {
+		var v T
+		tx.GetValue(bucket, key, &v)
+		if v, err = fn(v); err != nil {
+			return
+		}
+		return tx.PutValue(bucket, key, v)
+	})
 }
 
 func (s *SegDB) db(key string) *DB {

@@ -8,11 +8,13 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
 	"go.etcd.io/bbolt"
 	"go.oneofone.dev/oerrs"
+	"go.oneofone.dev/otk"
 )
 
 // bbolt type aliases
@@ -147,11 +149,11 @@ func (opts *Options) BoltOpts() *bbolt.Options {
 }
 
 var all struct {
-	MultiDB
 	mdbs struct {
-		sync.Mutex
 		dbs []*MultiDB
+		sync.Mutex
 	}
+	MultiDB
 }
 
 func Open(path string, opts *Options) (*DB, error) {
@@ -187,6 +189,7 @@ func NewMultiDB(prefix, ext string, opts *Options) *MultiDB {
 	if opts == nil {
 		opts = DefaultOptions
 	}
+
 	mdb := &MultiDB{opts: opts, prefix: prefix, ext: ext}
 	all.mdbs.Lock()
 	all.mdbs.dbs = append(all.mdbs.dbs, mdb)
@@ -195,11 +198,11 @@ func NewMultiDB(prefix, ext string, opts *Options) *MultiDB {
 }
 
 type MultiDB struct {
-	mux    sync.RWMutex
 	m      map[string]*DB
 	opts   *Options
 	prefix string
 	ext    string
+	mux    sync.RWMutex
 }
 
 func (mdb *MultiDB) MustGet(name string, opts *Options) *DB {
@@ -244,6 +247,10 @@ func (mdb *MultiDB) Get(name string, opts *Options) (db *DB, err error) {
 	mdb.mux.Lock()
 	defer mdb.mux.Unlock()
 
+	return mdb.get(bdb, name, opts)
+}
+
+func (mdb *MultiDB) get(bdb *BBoltDB, name string, opts *Options) (db *DB, err error) {
 	// race check
 	if db = mdb.m[name]; db != nil {
 		return
@@ -295,14 +302,13 @@ func (mdb *MultiDB) Get(name string, opts *Options) (db *DB, err error) {
 		mdb.m = map[string]*DB{}
 	}
 
-	mdb.m[name] = db
-
 	db.onClose = func() {
 		mdb.mux.Lock()
 		delete(mdb.m, name)
 		mdb.mux.Unlock()
 	}
 
+	mdb.m[name] = db
 	return
 }
 
@@ -423,6 +429,54 @@ func (mdb *MultiDB) Backup(w io.Writer, filter func(name string, db *DB) bool) (
 	return 0, nil
 }
 
+func (mdb *MultiDB) RestoreFromFile(fp string) (err error) {
+	var f *os.File
+	if f, err = os.Open(fp); err != nil {
+		return
+	}
+	defer f.Close()
+	return mdb.Restore(f)
+}
+
+func (mdb *MultiDB) Restore(r io.ReaderAt) (err error) {
+	mdb.mux.Lock()
+	defer mdb.mux.Unlock()
+	var names []string
+	if err = otk.Unzip(r, mdb.prefix, func(fp string, f *zip.File) bool {
+		name := strings.TrimPrefix(strings.TrimSuffix(fp, mdb.ext), mdb.prefix)
+		name = strings.TrimPrefix(name, "/")
+		names = append(names, name)
+		return true
+	}); err != nil {
+		return
+	}
+
+	for _, name := range names {
+		// log.Println("restoring", name)
+		if err = mdb.restoreOne(name, mdb.opts); err != nil {
+			return
+		}
+	}
+
+	return
+}
+
+func (mdb *MultiDB) restoreOne(name string, opts *Options) (err error) {
+	if odb := mdb.m[name]; odb != nil {
+		odb.onClose = nil
+		if err = odb.Close(); err != nil {
+			return
+		}
+		delete(mdb.m, name)
+	}
+	var bdb *BBoltDB
+	if bdb, err = bbolt.Open(mdb.getPath(name), 0o600, opts.BoltOpts()); err != nil {
+		return
+	}
+	_, err = mdb.get(bdb, name, opts)
+	return
+}
+
 func (mdb *MultiDB) Close() error {
 	mdb.mux.Lock()
 	defer mdb.mux.Unlock()
@@ -436,7 +490,7 @@ func (mdb *MultiDB) Close() error {
 			defer wg.Done()
 			db.onClose = nil // we're handling this
 			if err := db.Close(); err != nil {
-				el.Errorf("%s: %v", k, db)
+				el.Errorf("%s: %v", k, err)
 			}
 		}()
 
