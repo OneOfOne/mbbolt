@@ -105,6 +105,15 @@ func (s *SegDB) ForEachBytes(bucket string, fn func(k, v []byte) error) error {
 	return nil
 }
 
+func (s *SegDB) ForEachDB(fn func(db *DB) error) error {
+	for _, db := range s.dbs {
+		if err := fn(db); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *SegDB) Put(bucket, key string, v any) error {
 	return s.db(key).Put(bucket, key, v)
 }
@@ -117,18 +126,24 @@ func (s *SegDB) SetNextIndex(bucket string, seq uint64) error {
 	return s.dbs[0].SetNextIndex(bucket, seq)
 }
 
+func (s *SegDB) SetNextIndexByKey(bucket, key string, seq uint64) error {
+	return s.db(key).SetNextIndex(bucket, seq)
+}
+
 func (s *SegDB) NextIndex(bucket string) (seq uint64, err error) {
 	return s.dbs[0].NextIndex(bucket)
 }
 
+func (s *SegDB) NextIndexByKey(bucket, key string) (seq uint64, err error) {
+	return s.db(key).NextIndex(bucket)
+}
+
 func (s *SegDB) CurrentIndex(bucket string) (idx uint64) {
-	s.dbs[0].View(func(tx *Tx) error {
-		if b := tx.Bucket(bucket); b != nil {
-			idx = b.Sequence()
-		}
-		return nil
-	})
-	return
+	return s.dbs[0].CurrentIndex(bucket)
+}
+
+func (s *SegDB) CurrentIndexByKey(bucket, key string) (idx uint64) {
+	return s.db(key).CurrentIndex(bucket)
 }
 
 func (s *SegDB) Buckets() []string {
