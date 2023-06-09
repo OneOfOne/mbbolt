@@ -233,14 +233,22 @@ func (s *Server) handleTx(ctx *gserv.Context, req *srvReq) (out []byte, err erro
 			}
 			return err
 		case opSetSeq:
-			err = tx.SetNextIndex(req.Bucket, req.Value.(uint64))
+			var n uint64
+			switch v := req.Value.(type) {
+			case uint64:
+				n = v
+			case int64:
+				n = uint64(v)
+			default:
+				return oerrs.Errorf("invalid value type: %T", req.Value)
+			}
+			err = tx.SetNextIndex(req.Bucket, n)
 			return err
 		case opDel:
 			return tx.Delete(req.Bucket, req.Key)
 		default:
 			return oerrs.Errorf("unknown op: %s", req.Op)
 		}
-		return
 	})
 	je := &journalEntry{Op: "tx" + req.Op.String(), DB: dbName, Bucket: req.Bucket, Key: req.Key, Value: out}
 	s.j.Write(je, err)
@@ -288,7 +296,16 @@ func (s *Server) handleNoTx(ctx *gserv.Context, req *srvReq) (out []byte, err er
 		})
 	case opSetSeq:
 		err = db.Update(func(tx *mbbolt.Tx) error {
-			return tx.SetNextIndex(req.Bucket, req.Value.(uint64))
+			var n uint64
+			switch v := req.Value.(type) {
+			case uint64:
+				n = v
+			case int64:
+				n = uint64(v)
+			default:
+				return oerrs.Errorf("invalid value type: %T", req.Value)
+			}
+			return tx.SetNextIndex(req.Bucket, n)
 		})
 	case opDel:
 		err = db.Delete(req.Bucket, req.Key)

@@ -134,6 +134,7 @@ func (c *Client) Get(db, bucket, key string, v any) (err error) {
 	})
 	if err != nil {
 		c.cache(db).DeleteChild(bucket, key)
+		return
 	}
 	genh.ReflectClone(reflect.ValueOf(v).Elem(), reflect.Indirect(reflect.ValueOf(vv)), true)
 	return
@@ -161,7 +162,7 @@ func (c *Client) Update(db string, fn func(tx *Tx) error) error {
 		return err
 	}
 	if err := fn(tx); err != nil {
-		if err2 := tx.Rollback(); err != nil {
+		if err2 := tx.Rollback(); err2 != nil {
 			err = oerrs.Errorf("%v: %w", err, err2)
 		}
 		return err
