@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"io"
 	"net/http"
-	"reflect"
 	"strings"
 	"time"
 
@@ -30,11 +29,9 @@ func NewClient(addr, auth string) *Client {
 }
 
 type (
-	bucketKeyVal = genh.LMultiMap[string, string, any]
-	Client       struct {
+	Client struct {
 		c     *http.Client
 		locks genh.LMap[string, *Tx]
-		m     genh.LMap[string, *bucketKeyVal]
 		addr  string
 
 		RetryCount int
@@ -50,10 +47,6 @@ func (c *Client) Close() error {
 		return true
 	})
 	return el.Err()
-}
-
-func (c *Client) ClearCache() {
-	c.m.Clear()
 }
 
 func (c *Client) doTx(op op, db, bucket, key string, value, out any) (err error) {
@@ -111,12 +104,6 @@ func (c *Client) doReq(method, url string, body *srvReq, out any) (err error) {
 	return genh.DecodeMsgpack(resp.Body, out)
 }
 
-func (c *Client) cache(db string) *bucketKeyVal {
-	return c.m.MustGet(db, func() *bucketKeyVal {
-		return &bucketKeyVal{}
-	})
-}
-
 func (c *Client) NextIndex(db, bucket string) (id uint64, err error) {
 	err = c.doNoTx(opSeq, db, bucket, "", nil, &id)
 	return
@@ -128,23 +115,13 @@ func (c *Client) SetNextIndex(db, bucket string, id uint64) (err error) {
 }
 
 func (c *Client) Get(db, bucket, key string, v any) (err error) {
-	vv := c.cache(db).MustGet(bucket, key, func() any {
-		err = c.doNoTx(opGet, db, bucket, key, nil, v)
-		return reflect.ValueOf(v).Elem().Interface()
-	})
-	if err != nil {
-		c.cache(db).DeleteChild(bucket, key)
-		return
-	}
-	genh.ReflectClone(reflect.ValueOf(v).Elem(), reflect.Indirect(reflect.ValueOf(vv)), true)
-	return
+	return c.doNoTx(opGet, db, bucket, key, nil, v)
 }
 
 func (c *Client) Put(db, bucket, key string, v any) error {
 	if err := c.doNoTx(opPut, db, bucket, key, v, nil); err != nil {
 		return err
 	}
-	c.cache(db).Set(bucket, key, v)
 	return nil
 }
 
@@ -152,7 +129,6 @@ func (c *Client) Delete(db, bucket, key string) error {
 	if err := c.doNoTx(opDel, db, bucket, key, nil, nil); err != nil {
 		return err
 	}
-	c.cache(db).DeleteChild(bucket, key)
 	return nil
 }
 
@@ -183,8 +159,6 @@ type Tx struct {
 	c      *Client
 	db     string
 	prefix string
-
-	updates []func()
 }
 
 func (tx *Tx) NextIndex(bucket string) (id uint64, err error) {
@@ -202,21 +176,11 @@ func (tx *Tx) Get(bucket, key string, v any) (err error) {
 }
 
 func (tx *Tx) Put(bucket, key string, v any) (err error) {
-	if err = tx.c.doTx(opPut, tx.db, bucket, key, v, nil); err == nil {
-		tx.updates = append(tx.updates, func() {
-			tx.c.cache(tx.db).Set(bucket, key, v)
-		})
-	}
-	return
+	return tx.c.doTx(opPut, tx.db, bucket, key, v, nil)
 }
 
 func (tx *Tx) Delete(bucket, key string) (err error) {
-	if err = tx.c.doTx(opDel, tx.db, bucket, key, nil, nil); err == nil {
-		tx.updates = append(tx.updates, func() {
-			tx.c.cache(tx.db).DeleteChild(bucket, key)
-		})
-	}
-	return
+	return tx.c.doTx(opDel, tx.db, bucket, key, nil, nil)
 }
 
 func (tx *Tx) Commit() error {
@@ -231,9 +195,6 @@ func (tx *Tx) Commit() error {
 	}
 	if err := tx.c.doReq("DELETE", "tx/commit/"+tx.db, nil, nil); err != nil {
 		return err
-	}
-	for _, fn := range tx.updates {
-		fn()
 	}
 	return nil
 }
@@ -270,7 +231,7 @@ func ForEach[T any](c *Client, db, bucket string, fn func(key string, v T) error
 		return err
 	}
 	defer dec.Close()
-	return forEach(dec, c.cache(db), bucket, fn)
+	return forEach(dec, bucket, fn)
 }
 
 func ForEachTx[T any](tx *Tx, bucket string, fn func(key string, v T) error) error {
@@ -279,10 +240,10 @@ func ForEachTx[T any](tx *Tx, bucket string, fn func(key string, v T) error) err
 		return err
 	}
 	defer dec.Close()
-	return forEach(dec, tx.c.cache(tx.db), bucket, fn)
+	return forEach(dec, bucket, fn)
 }
 
-func forEach[T any](dec decCloser, cache *bucketKeyVal, bucket string, fn func(key string, v T) error) error {
+func forEach[T any](dec decCloser, bucket string, fn func(key string, v T) error) error {
 	for {
 		var kv [2][]byte
 		if err := dec.Decode(&kv); err != nil {
@@ -299,7 +260,6 @@ func forEach[T any](dec decCloser, cache *bucketKeyVal, bucket string, fn func(k
 			return err
 		}
 		key := otk.UnsafeString(kv[0])
-		cache.Set(bucket, key, v)
 		if err := fn(key, v); err != nil {
 			return err
 		}

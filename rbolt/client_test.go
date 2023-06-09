@@ -176,7 +176,6 @@ func TestClient(t *testing.T) {
 		if err := c.Get(dbName, bucketName+"2", "string", &str); err != nil || str != "str" {
 			t.Fatal("unexpected error", err, str)
 		}
-		c.ClearCache()
 
 		if err := c.Get(dbName, bucketName+"2", "string", &str); err != nil || str != "str" {
 			t.Fatal("unexpected error", err, str)
@@ -190,7 +189,6 @@ func TestClient(t *testing.T) {
 			t.Fatal(err)
 		}
 		var str string
-		c.ClearCache()
 
 		if err := c.Get(dbName, bucketName+"2", ".", &str); err != nil || str != "str" {
 			t.Fatal("unexpected error", err, str)
@@ -198,7 +196,6 @@ func TestClient(t *testing.T) {
 		if err := c.Put(dbName, bucketName+"2", "#", "str"); err != nil {
 			t.Fatal(err)
 		}
-		c.ClearCache()
 
 		if err := c.Get(dbName, bucketName+"2", "#", &str); err != nil || str != "str" {
 			t.Fatal("unexpected error", err, str)
@@ -248,7 +245,7 @@ func TestClient(t *testing.T) {
 			// t.Log(je)
 		}
 		// update this when the test changes
-		if cnt != 225 {
+		if cnt != 229 {
 			t.Error("unexpected number of journal entries", cnt)
 		}
 		t.Logf("total %d entries", cnt)
