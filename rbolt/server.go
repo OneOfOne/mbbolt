@@ -22,7 +22,7 @@ var (
 	lg = log.New(log.Default().Writer(), "", log.Lshortfile)
 )
 
-const Version = 202203022
+const Version = 20230609
 
 func NewServer(dbPath string, dbOpts *mbbolt.Options) *Server {
 	srv := &Server{
