@@ -229,19 +229,25 @@ func (mdb *MultiDB) Get(name string, opts *Options) (db *DB, err error) {
 	}
 
 	var bdb *BBoltDB
-	if bdb, err = bbolt.Open(fp, 0o600, opts.BoltOpts()); err != nil && err != bbolt.ErrTimeout {
-		return
-	}
 
-	if err == bbolt.ErrTimeout {
+	for {
 		err = nil
-		for db == nil {
-			mdb.mux.RLock()
-			db = mdb.m[name]
-			mdb.mux.RUnlock()
-			time.Sleep(time.Millisecond * 10)
+		mdb.mux.RLock()
+		db = mdb.m[name]
+		mdb.mux.RUnlock()
+		if db != nil { // concurrency check
+			return
 		}
-		return
+
+		if bdb, err = bbolt.Open(fp, 0o600, opts.BoltOpts()); err != nil && err != bbolt.ErrTimeout {
+			return
+		}
+
+		if err == nil {
+			break
+		}
+
+		time.Sleep(time.Millisecond * 10)
 	}
 
 	mdb.mux.Lock()
