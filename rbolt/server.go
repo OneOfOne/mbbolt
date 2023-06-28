@@ -3,6 +3,7 @@ package rbolt
 import (
 	"context"
 	"log"
+	"math"
 	"net/http"
 	"strings"
 	"sync"
@@ -16,8 +17,9 @@ import (
 )
 
 var (
-	RespOK       = gserv.NewMsgpResponse(nil).Cached()
-	RespNotFound = gserv.NewError(http.StatusNotFound, "Not Found")
+	RespOK              = gserv.NewMsgpResponse(nil).Cached()
+	RespNotFound        = gserv.NewError(http.StatusNotFound, "Not Found")
+	RespAlreadyUnlocked = gserv.NewError(http.StatusLocked, "Already Unlocked")
 
 	lg = log.New(log.Default().Writer(), "", log.Lshortfile)
 )
@@ -30,7 +32,7 @@ func NewServer(dbPath string, dbOpts *mbbolt.Options) *Server {
 		mdb: mbbolt.NewMultiDB(dbPath, ".db", dbOpts),
 		j:   newJournal(dbPath, "logs/2006/01/02", true),
 
-		MaxUnusedLock: time.Minute,
+		MaxUnusedLock: time.Second * 30,
 	}
 	return srv.init()
 }
@@ -69,8 +71,7 @@ type (
 		mdb *mbbolt.MultiDB
 		j   *journal
 
-		mux   sync.Mutex
-		lock  genh.LMap[string, *serverTx]
+		txs   genh.LMap[string, *serverTx]
 		stats stats
 
 		MaxUnusedLock time.Duration
@@ -98,6 +99,7 @@ func (s *Server) init() *Server {
 
 	gserv.MsgpPost(s.s, "/noTx/*db", s.handleNoTx, false)
 
+	go s.checkLocks()
 	return s
 }
 
@@ -109,48 +111,66 @@ func (s *Server) getStats(ctx *gserv.Context) (*stats, error) {
 	return &s.stats, nil
 }
 
-func (s *Server) txBegin(ctx *gserv.Context, req any) (string, error) {
+func (s *Server) txBegin(ctx *gserv.Context, req any) ([]byte, error) {
 	dbName := ctx.Param("db")
 	if dbName == "" {
 		dbName = "default"
 	}
+
 	db, err := s.mdb.Get(dbName, nil)
 	if err != nil {
-		return "", gserv.NewError(http.StatusInternalServerError, err)
+		return nil, gserv.NewError(http.StatusInternalServerError, err)
 	}
+
 	tx, err := db.Begin(true)
 	if err != nil {
-		return "", gserv.NewError(http.StatusInternalServerError, err)
+		return nil, gserv.NewError(http.StatusInternalServerError, err)
 	}
-	s.j.Write(&journalEntry{Op: "txBegin", DB: dbName}, err)
 
-	tts := &serverTx{Tx: tx}
+	tts := s.txs.MustGet(dbName, func() *serverTx {
+		return &serverTx{}
+	})
+
+	tts.Lock()
+	defer tts.Unlock()
+
+	if rctx := ctx.Req.Context(); rctx.Err() != nil {
+		lg.Printf("%s: txBegin canceled %v", dbName, tts.Tx != nil)
+		return nil, tx.Rollback()
+	}
+
+	if tts.Tx != nil {
+		return nil, gserv.NewError(http.StatusConflict, "tx already exists")
+	}
+
+	tts.Tx = tx
 	tts.last.Store(time.Now().UnixNano())
-	s.lock.Set(dbName, tts)
 	s.stats.Locks.Add(1)
 	s.stats.ActiveLocks.Add(1)
-	go s.checkLock(dbName)
-	return "OK", nil
+	s.j.Write(&journalEntry{Op: "txBegin", DB: dbName}, nil)
+	return nil, nil
 }
 
-func (s *Server) txCommit(ctx *gserv.Context) (string, error) {
+func (s *Server) txCommit(ctx *gserv.Context) ([]byte, error) {
 	return s.unlock(ctx.Param("db"), true)
 }
 
-func (s *Server) txRollback(ctx *gserv.Context) (string, error) {
+func (s *Server) txRollback(ctx *gserv.Context) ([]byte, error) {
 	return s.unlock(ctx.Param("db"), false)
 }
 
-func (s *Server) unlock(dbName string, commit bool) (string, error) {
+func (s *Server) unlock(dbName string, commit bool) ([]byte, error) {
 	if dbName == "" {
 		dbName = "default"
 	}
+
 	err := s.withTx(dbName, true, func(tx *mbbolt.Tx) error {
 		if commit {
 			return tx.Commit()
 		}
 		return tx.Rollback()
 	})
+
 	je := &journalEntry{DB: dbName}
 	if commit {
 		s.stats.Commits.Add(1)
@@ -160,44 +180,58 @@ func (s *Server) unlock(dbName string, commit bool) (string, error) {
 		je.Op = "txRollback"
 	}
 	s.j.Write(je, err)
+
+	s.stats.ActiveLocks.Add(-1)
+
 	if err != nil {
-		return "", gserv.NewError(http.StatusInternalServerError, err)
+		return nil, gserv.NewError(http.StatusInternalServerError, err)
 	}
 
-	return "OK", nil
+	return nil, nil
 }
 
-func (s *Server) checkLock(dbName string) {
-	for tx := s.lock.Get(dbName); tx != nil; tx = s.lock.Get(dbName) {
-		if time.Duration(time.Now().UnixNano()-tx.last.Load()) > s.MaxUnusedLock {
-			tx.Lock()
-			lg.Printf("deleted stale lock: %s", dbName)
-			tx.Rollback()
-			s.lock.Delete(dbName)
-			s.stats.Timeouts.Add(1)
-			tx.Unlock()
-			break
+func (s *Server) checkLocks() {
+	for {
+		for _, dbName := range s.txs.Keys() {
+			tx := s.txs.Get(dbName)
+			if tx == nil {
+				continue
+			}
+
+			if time.Duration(time.Now().UnixNano()-tx.last.Load()) > s.MaxUnusedLock {
+				lg.Printf("deleted stale lock: %s", dbName)
+				s.stats.Timeouts.Add(1)
+				if _, err := s.unlock(dbName, false); err != nil {
+					lg.Printf("failed to unlock: %s", err)
+				}
+			}
 		}
 		time.Sleep(time.Second)
 	}
-	s.stats.ActiveLocks.Add(-1)
 }
 
 func (s *Server) withTx(dbName string, rm bool, fn func(tx *mbbolt.Tx) error) error {
 	if dbName == "" {
 		dbName = "default"
 	}
-	tx := s.lock.Get(dbName)
+	tx := s.txs.Get(dbName)
 	if tx == nil {
 		return gserv.ErrNotFound
 	}
-	tx.Lock()
-	defer tx.Unlock()
-	if rm {
-		s.lock.Delete(dbName)
-	}
 
 	tx.last.Store(time.Now().UnixNano())
+
+	tx.Lock()
+	defer func() {
+		if rm {
+			tx.Tx = nil
+			tx.last.Store(math.MaxInt64)
+		}
+		tx.Unlock()
+	}()
+	if tx.Tx == nil {
+		return RespAlreadyUnlocked
+	}
 	return fn(tx.Tx)
 }
 
@@ -218,7 +252,9 @@ func (s *Server) handleTx(ctx *gserv.Context, req *srvReq) (out []byte, err erro
 			}
 			return err
 		case opPut:
-			return tx.PutBytes(req.Bucket, req.Key, out)
+			err = tx.PutBytes(req.Bucket, req.Key, out)
+			out = nil
+			return
 		case opForEach:
 			enc := genh.NewMsgpackEncoder(ctx)
 			return tx.ForEachBytes(req.Bucket, func(key, val []byte) error {
@@ -252,6 +288,12 @@ func (s *Server) handleTx(ctx *gserv.Context, req *srvReq) (out []byte, err erro
 	})
 	je := &journalEntry{Op: "tx" + req.Op.String(), DB: dbName, Bucket: req.Bucket, Key: req.Key, Value: out}
 	s.j.Write(je, err)
+
+	if rctx := ctx.Req.Context(); rctx.Err() != nil {
+		lg.Printf("%s: tx canceled", dbName)
+		return s.unlock(dbName, false)
+	}
+
 	if err != nil {
 		return nil, gserv.NewError(http.StatusInternalServerError, err)
 	}

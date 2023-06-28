@@ -23,6 +23,8 @@ type S struct {
 	C float64
 }
 
+var ctx = context.Background()
+
 func TestClient(t *testing.T) {
 	const dbName = "shinyDB"
 	const bucketName = "someBucket"
@@ -32,7 +34,7 @@ func TestClient(t *testing.T) {
 	defer rbs.Close()
 	rbs.MaxUnusedLock = time.Second / 10
 	// defer rbs.Close()
-	go rbs.Run(context.Background(), ":0")
+	go rbs.Run(ctx, ":0")
 
 	time.Sleep(time.Millisecond * 100)
 	url := "http://" + rbs.s.Addrs()[0]
@@ -42,12 +44,12 @@ func TestClient(t *testing.T) {
 		c := NewClient(url, rbs.AuthKey)
 		defer c.Close()
 		sp := &S{A: "test", B: 123, C: 123.456, S: &S{A: "-", B: 321, C: 654.321}}
-		if err := c.Put(dbName, bucketName, "key", sp); err != nil {
+		if err := c.Put(ctx, dbName, bucketName, "key", sp); err != nil {
 			t.Fatal(err)
 		}
 
 		var s S
-		if err := c.Get(dbName, bucketName, "key", &s); err != nil {
+		if err := c.Get(ctx, dbName, bucketName, "key", &s); err != nil {
 			t.Fatal(err)
 		}
 
@@ -56,7 +58,7 @@ func TestClient(t *testing.T) {
 		}
 
 		found := false
-		if err := ForEach(c, dbName, bucketName, func(key string, ss *S) error {
+		if err := ForEach(ctx, c, dbName, bucketName, func(key string, ss *S) error {
 			if key == "key" && ss.A == "test" && ss.B == 123 && ss.C == 123.456 {
 				found = true
 			}
@@ -69,11 +71,11 @@ func TestClient(t *testing.T) {
 			t.Fatal("foreach failed")
 		}
 
-		if err := c.Delete(dbName, bucketName, "key"); err != nil {
+		if err := c.Delete(ctx, dbName, bucketName, "key"); err != nil {
 			t.Fatal(err)
 		}
 
-		if err := c.Get(dbName, bucketName, "key", &s); err == nil {
+		if err := c.Get(ctx, dbName, bucketName, "key", &s); err == nil {
 			t.Fatal("expected error", s)
 		}
 	})
@@ -81,7 +83,7 @@ func TestClient(t *testing.T) {
 	t.Run("Tx", func(t *testing.T) {
 		c := NewClient(url, rbs.AuthKey)
 		defer c.Close()
-		if err := c.Update(dbName, func(tx *Tx) error {
+		if err := c.Update(ctx, dbName, func(tx *Tx) error {
 			tx.SetNextIndex(bucketName, 100)
 			for i := 0; i < 100; i++ {
 				id, err := tx.NextIndex(bucketName)
@@ -123,14 +125,14 @@ func TestClient(t *testing.T) {
 		}
 
 		var s S
-		if err := c.Get(dbName, bucketName, "1105", &s); err != nil {
+		if err := c.Get(ctx, dbName, bucketName, "1105", &s); err != nil {
 			t.Fatal(err)
 		}
 		if s.S == nil || s.S.B != 105 {
 			t.Fatal("expected s.S.B == 105")
 		}
 
-		if err := c.Update(dbName, func(tx *Tx) error {
+		if err := c.Update(ctx, dbName, func(tx *Tx) error {
 			if err := tx.Delete(bucketName, "1105"); err != nil {
 				return err
 			}
@@ -143,7 +145,7 @@ func TestClient(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		if err := c.Get(dbName, bucketName, "1105", &s); err == nil {
+		if err := c.Get(ctx, dbName, bucketName, "1105", &s); err == nil {
 			t.Fatal(err)
 		}
 	})
@@ -151,7 +153,7 @@ func TestClient(t *testing.T) {
 	t.Run("AutoUnlock", func(t *testing.T) {
 		c := NewClient(url, rbs.AuthKey)
 		defer c.Close()
-		err := c.Update(dbName, func(tx *Tx) error {
+		err := c.Update(ctx, dbName, func(tx *Tx) error {
 			if err := tx.Put(bucketName, "1005", &S{A: "test", S: &S{B: 5}}); err != nil {
 				return err
 			}
@@ -169,15 +171,15 @@ func TestClient(t *testing.T) {
 	t.Run("BugDecodingSimpleTypes", func(t *testing.T) {
 		c := NewClient(url, rbs.AuthKey)
 		defer c.Close()
-		if err := c.Put(dbName, bucketName+"2", "string", "str"); err != nil {
+		if err := c.Put(ctx, dbName, bucketName+"2", "string", "str"); err != nil {
 			t.Fatal(err)
 		}
 		var str string
-		if err := c.Get(dbName, bucketName+"2", "string", &str); err != nil || str != "str" {
+		if err := c.Get(ctx, dbName, bucketName+"2", "string", &str); err != nil || str != "str" {
 			t.Fatal("unexpected error", err, str)
 		}
 
-		if err := c.Get(dbName, bucketName+"2", "string", &str); err != nil || str != "str" {
+		if err := c.Get(ctx, dbName, bucketName+"2", "string", &str); err != nil || str != "str" {
 			t.Fatal("unexpected error", err, str)
 		}
 	})
@@ -185,19 +187,19 @@ func TestClient(t *testing.T) {
 	t.Run("BugBadNames", func(t *testing.T) {
 		c := NewClient(url, rbs.AuthKey)
 		defer c.Close()
-		if err := c.Put(dbName, bucketName+"2", ".", "str"); err != nil {
+		if err := c.Put(ctx, dbName, bucketName+"2", ".", "str"); err != nil {
 			t.Fatal(err)
 		}
 		var str string
 
-		if err := c.Get(dbName, bucketName+"2", ".", &str); err != nil || str != "str" {
+		if err := c.Get(ctx, dbName, bucketName+"2", ".", &str); err != nil || str != "str" {
 			t.Fatal("unexpected error", err, str)
 		}
-		if err := c.Put(dbName, bucketName+"2", "#", "str"); err != nil {
+		if err := c.Put(ctx, dbName, bucketName+"2", "#", "str"); err != nil {
 			t.Fatal(err)
 		}
 
-		if err := c.Get(dbName, bucketName+"2", "#", &str); err != nil || str != "str" {
+		if err := c.Get(ctx, dbName, bucketName+"2", "#", &str); err != nil || str != "str" {
 			t.Fatal("unexpected error", err, str)
 		}
 	})
@@ -207,17 +209,17 @@ func TestClient(t *testing.T) {
 		// c.AuthKey = rbs.AuthKey
 		defer c.Close()
 		c.AuthKey = ""
-		if err := c.Put("", bucketName, "11111", &S{A: "test", S: &S{B: 5}}); err == nil {
+		if err := c.Put(ctx, "", bucketName, "11111", &S{A: "test", S: &S{B: 5}}); err == nil {
 			t.Fatal("expected error")
 		}
 		c.AuthKey = rbs.AuthKey
 
-		if err := c.Put("", bucketName, "11111", &S{A: "test", S: &S{B: 5}}); err != nil {
+		if err := c.Put(ctx, "", bucketName, "11111", &S{A: "test", S: &S{B: 5}}); err != nil {
 			t.Fatal("unexpected error")
 		}
 
 		var s S
-		if err := c.Get("", bucketName, "11111", &s); err != nil {
+		if err := c.Get(ctx, "", bucketName, "11111", &s); err != nil {
 			t.Fatal("unexpected error", err, s)
 		}
 		if s.S == nil || s.S.B != 5 {
@@ -245,7 +247,7 @@ func TestClient(t *testing.T) {
 			// t.Log(je)
 		}
 		// update this when the test changes
-		if cnt != 229 {
+		if cnt != 230 {
 			t.Error("unexpected number of journal entries", cnt)
 		}
 		t.Logf("total %d entries", cnt)

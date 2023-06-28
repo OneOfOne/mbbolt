@@ -46,7 +46,7 @@ func main() {
 	cli := rbolt.NewClient(saddr, authKey)
 	defer cli.Close()
 
-	err := cli.Update(args[1], func(tx *rbolt.Tx) error {
+	err := cli.Update(context.Background(), args[1], func(tx *rbolt.Tx) error {
 		switch args[0] {
 		case "put":
 			if len(args) < 5 {

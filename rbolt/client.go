@@ -2,6 +2,7 @@ package rbolt
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"net/http"
 	"strings"
@@ -43,21 +44,21 @@ type (
 func (c *Client) Close() error {
 	var el oerrs.ErrorList
 	c.locks.ForEach(func(k string, tx *Tx) bool {
-		el.PushIf(tx.Rollback())
+		el.PushIf(tx.rollback())
 		return true
 	})
 	return el.Err()
 }
 
-func (c *Client) doTx(op op, db, bucket, key string, value, out any) (err error) {
-	return c.doReq("POST", "tx/"+db, &srvReq{Op: op, Bucket: bucket, Key: key, Value: value}, out)
+func (c *Client) doTx(ctx context.Context, op op, db, bucket, key string, value, out any) (err error) {
+	return c.doReq(ctx, "POST", "tx/"+db, &srvReq{Op: op, Bucket: bucket, Key: key, Value: value}, out)
 }
 
-func (c *Client) doNoTx(op op, db, bucket, key string, value, out any) (err error) {
-	return c.doReq("POST", "noTx/"+db, &srvReq{Op: op, Bucket: bucket, Key: key, Value: value}, out)
+func (c *Client) doNoTx(ctx context.Context, op op, db, bucket, key string, value, out any) (err error) {
+	return c.doReq(ctx, "POST", "noTx/"+db, &srvReq{Op: op, Bucket: bucket, Key: key, Value: value}, out)
 }
 
-func (c *Client) doReq(method, url string, body *srvReq, out any) (err error) {
+func (c *Client) doReq(ctx context.Context, method, url string, body *srvReq, out any) (err error) {
 	var resp *http.Response
 	var bodyBytes []byte
 	if bodyBytes, err = genh.MarshalMsgpack(body); err != nil {
@@ -66,12 +67,15 @@ func (c *Client) doReq(method, url string, body *srvReq, out any) (err error) {
 
 	retry := c.RetryCount
 	for {
-		req, _ := http.NewRequest(method, c.addr+url, bytes.NewReader(bodyBytes))
+		req, _ := http.NewRequestWithContext(ctx, method, c.addr+url, bytes.NewReader(bodyBytes))
 		if c.AuthKey != "" {
 			req.Header.Set("Authorization", c.AuthKey)
 		}
 		if resp, err = c.c.Do(req); err == nil {
 			break
+		}
+		if ctx.Err() != nil {
+			return
 		}
 		if retry--; retry < 1 {
 			return oerrs.ErrorCallerf(2, "failed after %d retires: %w", c.RetryCount, err)
@@ -104,86 +108,86 @@ func (c *Client) doReq(method, url string, body *srvReq, out any) (err error) {
 	return genh.DecodeMsgpack(resp.Body, out)
 }
 
-func (c *Client) NextIndex(db, bucket string) (id uint64, err error) {
-	err = c.doNoTx(opSeq, db, bucket, "", nil, &id)
+func (c *Client) NextIndex(ctx context.Context, db, bucket string) (id uint64, err error) {
+	err = c.doNoTx(ctx, opSeq, db, bucket, "", nil, &id)
 	return
 }
 
-func (c *Client) SetNextIndex(db, bucket string, id uint64) (err error) {
-	err = c.doNoTx(opSetSeq, db, bucket, "", id, nil)
+func (c *Client) SetNextIndex(ctx context.Context, db, bucket string, id uint64) (err error) {
+	err = c.doNoTx(ctx, opSetSeq, db, bucket, "", id, nil)
 	return
 }
 
-func (c *Client) Get(db, bucket, key string, v any) (err error) {
-	return c.doNoTx(opGet, db, bucket, key, nil, v)
+func (c *Client) Get(ctx context.Context, db, bucket, key string, v any) (err error) {
+	return c.doNoTx(ctx, opGet, db, bucket, key, nil, v)
 }
 
-func (c *Client) Put(db, bucket, key string, v any) error {
-	if err := c.doNoTx(opPut, db, bucket, key, v, nil); err != nil {
+func (c *Client) Put(ctx context.Context, db, bucket, key string, v any) error {
+	if err := c.doNoTx(ctx, opPut, db, bucket, key, v, nil); err != nil {
 		return err
 	}
 	return nil
 }
 
-func (c *Client) Delete(db, bucket, key string) error {
-	if err := c.doNoTx(opDel, db, bucket, key, nil, nil); err != nil {
+func (c *Client) Delete(ctx context.Context, db, bucket, key string) error {
+	if err := c.doNoTx(ctx, opDel, db, bucket, key, nil, nil); err != nil {
 		return err
 	}
 	return nil
 }
 
-func (c *Client) Update(db string, fn func(tx *Tx) error) error {
-	tx, err := c.Begin(db)
+func (c *Client) Update(ctx context.Context, db string, fn func(tx *Tx) error) error {
+	tx, err := c.begin(ctx, db)
 	if err != nil {
 		return err
 	}
 	if err := fn(tx); err != nil {
-		if err2 := tx.Rollback(); err2 != nil {
+		if err2 := tx.rollback(); err2 != nil {
 			err = oerrs.Errorf("%v: %w", err, err2)
 		}
 		return err
 	}
-	return tx.Commit()
+	return tx.commit()
 }
 
-func (c *Client) Begin(db string) (*Tx, error) {
-	if err := c.doReq("POST", "tx/begin/"+db, nil, nil); err != nil {
+func (c *Client) begin(ctx context.Context, db string) (*Tx, error) {
+	if err := c.doReq(ctx, "POST", "tx/begin/"+db, nil, nil); err != nil {
 		return nil, err
 	}
-	tx := &Tx{c: c, db: db, prefix: "tx/" + db + "/"}
+	tx := &Tx{ctx: ctx, c: c, db: db}
 	c.locks.Set(db, tx)
 	return tx, nil
 }
 
 type Tx struct {
-	c      *Client
-	db     string
-	prefix string
+	ctx context.Context
+	c   *Client
+	db  string
 }
 
 func (tx *Tx) NextIndex(bucket string) (id uint64, err error) {
-	err = tx.c.doTx(opSeq, tx.db, bucket, "", nil, &id)
+	err = tx.c.doTx(tx.ctx, opSeq, tx.db, bucket, "", nil, &id)
 	return
 }
 
 func (tx *Tx) SetNextIndex(bucket string, id uint64) (err error) {
-	err = tx.c.doTx(opSetSeq, tx.db, bucket, "", id, nil)
+	err = tx.c.doTx(tx.ctx, opSetSeq, tx.db, bucket, "", id, nil)
 	return
 }
 
 func (tx *Tx) Get(bucket, key string, v any) (err error) {
-	return tx.c.doTx(opGet, tx.db, bucket, key, nil, v)
+	return tx.c.doTx(tx.ctx, opGet, tx.db, bucket, key, nil, v)
 }
 
 func (tx *Tx) Put(bucket, key string, v any) (err error) {
-	return tx.c.doTx(opPut, tx.db, bucket, key, v, nil)
+	return tx.c.doTx(tx.ctx, opPut, tx.db, bucket, key, v, nil)
 }
 
 func (tx *Tx) Delete(bucket, key string) (err error) {
-	return tx.c.doTx(opDel, tx.db, bucket, key, nil, nil)
+	return tx.c.doTx(tx.ctx, opDel, tx.db, bucket, key, nil, nil)
 }
 
-func (tx *Tx) Commit() error {
+func (tx *Tx) commit() error {
 	gotLock := false
 	tx.c.locks.Update(func(m map[string]*Tx) {
 		if gotLock = m[tx.db] == tx; gotLock {
@@ -193,13 +197,13 @@ func (tx *Tx) Commit() error {
 	if !gotLock {
 		return oerrs.Errorf("no lock for %s", tx.db)
 	}
-	if err := tx.c.doReq("DELETE", "tx/commit/"+tx.db, nil, nil); err != nil {
+	if err := tx.c.doReq(tx.ctx, "DELETE", "tx/commit/"+tx.db, nil, nil); err != nil {
 		return err
 	}
 	return nil
 }
 
-func (tx *Tx) Rollback() error {
+func (tx *Tx) rollback() error {
 	gotLock := false
 	tx.c.locks.Update(func(m map[string]*Tx) {
 		if gotLock = m[tx.db] == tx; gotLock {
@@ -209,7 +213,7 @@ func (tx *Tx) Rollback() error {
 	if !gotLock {
 		return oerrs.Errorf("no lock for %s", tx.db)
 	}
-	if err := tx.c.doReq("DELETE", "tx/rollback/"+tx.db, nil, nil); err != nil {
+	if err := tx.c.doReq(tx.ctx, "DELETE", "tx/rollback/"+tx.db, nil, nil); err != nil {
 		return err
 	}
 	return nil
@@ -220,30 +224,30 @@ type decCloser struct {
 	io.Closer
 }
 
-func Get[T any](c *Client, db, bucket, key string) (v T, err error) {
-	err = c.Get(db, bucket, key, &v)
+func Get[T any](ctx context.Context, c *Client, db, bucket, key string) (v T, err error) {
+	err = c.Get(ctx, db, bucket, key, &v)
 	return
 }
 
-func ForEach[T any](c *Client, db, bucket string, fn func(key string, v T) error) error {
+func ForEach[T any](ctx context.Context, c *Client, db, bucket string, fn func(key string, v T) error) error {
 	var dec decCloser
-	if err := c.doNoTx(opForEach, db, bucket, "", nil, &dec); err != nil {
+	if err := c.doNoTx(ctx, opForEach, db, bucket, "", nil, &dec); err != nil {
 		return err
 	}
 	defer dec.Close()
-	return forEach(dec, bucket, fn)
+	return forEach(ctx, dec, bucket, fn)
 }
 
 func ForEachTx[T any](tx *Tx, bucket string, fn func(key string, v T) error) error {
 	var dec decCloser
-	if err := tx.c.doTx(opForEach, tx.db, bucket, "", nil, &dec); err != nil {
+	if err := tx.c.doTx(tx.ctx, opForEach, tx.db, bucket, "", nil, &dec); err != nil {
 		return err
 	}
 	defer dec.Close()
-	return forEach(dec, bucket, fn)
+	return forEach(tx.ctx, dec, bucket, fn)
 }
 
-func forEach[T any](dec decCloser, bucket string, fn func(key string, v T) error) error {
+func forEach[T any](ctx context.Context, dec decCloser, bucket string, fn func(key string, v T) error) error {
 	for {
 		var kv [2][]byte
 		if err := dec.Decode(&kv); err != nil {
