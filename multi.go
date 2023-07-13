@@ -2,6 +2,7 @@ package mbbolt
 
 import (
 	"archive/zip"
+	"context"
 	"fmt"
 	"io"
 	"log"
@@ -156,20 +157,12 @@ var all struct {
 	MultiDB
 }
 
-func Open(path string, opts *Options) (*DB, error) {
-	if opts == nil {
-		opts = DefaultOptions
-	}
-
-	return all.Get(path, opts)
+func Open(ctx context.Context, path string, opts *Options) (*DB, error) {
+	return all.Get(ctx, path, opts)
 }
 
-func MustOpen(path string, opts *Options) *DB {
-	if opts == nil {
-		opts = DefaultOptions
-	}
-
-	return all.MustGet(path, opts)
+func MustOpen(ctx context.Context, path string, opts *Options) *DB {
+	return all.MustGet(ctx, path, opts)
 }
 
 func CloseAll() error {
@@ -205,17 +198,21 @@ type MultiDB struct {
 	mux    sync.RWMutex
 }
 
-func (mdb *MultiDB) MustGet(name string, opts *Options) *DB {
-	db, err := mdb.Get(name, opts)
+func (mdb *MultiDB) MustGet(ctx context.Context, name string, opts *Options) *DB {
+	db, err := mdb.Get(ctx, name, opts)
 	if err != nil {
 		log.Panicf("MustGet (%s): %v", name, err)
 	}
 	return db
 }
 
-func (mdb *MultiDB) Get(name string, opts *Options) (db *DB, err error) {
+func (mdb *MultiDB) Get(ctx context.Context, name string, opts *Options) (db *DB, err error) {
 	fp := mdb.getPath(name)
 	os.MkdirAll(filepath.Dir(fp), 0o755)
+
+	if err = ctx.Err(); err != nil {
+		return
+	}
 
 	mdb.mux.RLock()
 	if db = mdb.m[name]; db != nil {
@@ -228,6 +225,10 @@ func (mdb *MultiDB) Get(name string, opts *Options) (db *DB, err error) {
 		opts = mdb.opts
 	}
 
+	if opts == nil {
+		opts = DefaultOptions
+	}
+
 	var bdb *BBoltDB
 
 	for {
@@ -235,7 +236,12 @@ func (mdb *MultiDB) Get(name string, opts *Options) (db *DB, err error) {
 		mdb.mux.RLock()
 		db = mdb.m[name]
 		mdb.mux.RUnlock()
+
 		if db != nil { // concurrency check
+			return
+		}
+
+		if err = ctx.Err(); err != nil {
 			return
 		}
 
@@ -253,10 +259,10 @@ func (mdb *MultiDB) Get(name string, opts *Options) (db *DB, err error) {
 	mdb.mux.Lock()
 	defer mdb.mux.Unlock()
 
-	return mdb.get(bdb, name, opts)
+	return mdb.get(ctx, bdb, name, opts)
 }
 
-func (mdb *MultiDB) get(bdb *BBoltDB, name string, opts *Options) (db *DB, err error) {
+func (mdb *MultiDB) get(ctx context.Context, bdb *BBoltDB, name string, opts *Options) (db *DB, err error) {
 	// race check
 	if db = mdb.m[name]; db != nil {
 		return
@@ -271,7 +277,8 @@ func (mdb *MultiDB) get(bdb *BBoltDB, name string, opts *Options) (db *DB, err e
 	}
 
 	db = &DB{
-		b: bdb,
+		ctx: ctx,
+		b:   bdb,
 
 		marshalFn:   DefaultMarshalFn,
 		unmarshalFn: DefaultUnmarshalFn,
@@ -435,16 +442,16 @@ func (mdb *MultiDB) Backup(w io.Writer, filter func(name string, db *DB) bool) (
 	return 0, nil
 }
 
-func (mdb *MultiDB) RestoreFromFile(fp string) (err error) {
+func (mdb *MultiDB) RestoreFromFile(ctx context.Context, fp string) (err error) {
 	var f *os.File
 	if f, err = os.Open(fp); err != nil {
 		return
 	}
 	defer f.Close()
-	return mdb.Restore(f)
+	return mdb.Restore(ctx, f)
 }
 
-func (mdb *MultiDB) Restore(r io.ReaderAt) (err error) {
+func (mdb *MultiDB) Restore(ctx context.Context, r io.ReaderAt) (err error) {
 	mdb.mux.Lock()
 	defer mdb.mux.Unlock()
 	var names []string
@@ -459,7 +466,7 @@ func (mdb *MultiDB) Restore(r io.ReaderAt) (err error) {
 
 	for _, name := range names {
 		// log.Println("restoring", name)
-		if err = mdb.restoreOne(name, mdb.opts); err != nil {
+		if err = mdb.restoreOne(ctx, name, mdb.opts); err != nil {
 			return
 		}
 	}
@@ -467,7 +474,7 @@ func (mdb *MultiDB) Restore(r io.ReaderAt) (err error) {
 	return
 }
 
-func (mdb *MultiDB) restoreOne(name string, opts *Options) (err error) {
+func (mdb *MultiDB) restoreOne(ctx context.Context, name string, opts *Options) (err error) {
 	if odb := mdb.m[name]; odb != nil {
 		odb.onClose = nil
 		if err = odb.Close(); err != nil {
@@ -479,7 +486,7 @@ func (mdb *MultiDB) restoreOne(name string, opts *Options) (err error) {
 	if bdb, err = bbolt.Open(mdb.getPath(name), 0o600, opts.BoltOpts()); err != nil {
 		return
 	}
-	_, err = mdb.get(bdb, name, opts)
+	_, err = mdb.get(ctx, bdb, name, opts)
 	return
 }
 

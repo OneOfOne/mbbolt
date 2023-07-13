@@ -80,9 +80,9 @@ func FramesToString(frs *runtime.Frames) string {
 }
 
 type slowUpdate struct {
-	sync.Mutex
 	fn  OnSlowUpdateFn
 	min time.Duration
+	sync.Mutex
 }
 
 type stringCap struct {

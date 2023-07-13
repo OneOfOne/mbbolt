@@ -117,7 +117,7 @@ func (s *Server) txBegin(ctx *gserv.Context, req any) ([]byte, error) {
 		dbName = "default"
 	}
 
-	db, err := s.mdb.Get(dbName, nil)
+	db, err := s.mdb.Get(context.Background(), dbName, nil)
 	if err != nil {
 		return nil, gserv.NewError(http.StatusInternalServerError, err)
 	}
@@ -306,7 +306,7 @@ func (s *Server) handleNoTx(ctx *gserv.Context, req *srvReq) (out []byte, err er
 		dbName = "default"
 	}
 	var db *mbbolt.DB
-	if db, err = s.mdb.Get(dbName, nil); err != nil {
+	if db, err = s.mdb.Get(context.Background(), dbName, nil); err != nil {
 		return
 	}
 	switch req.Op {

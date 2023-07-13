@@ -1,6 +1,7 @@
 package mbbolt
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"testing"
@@ -11,9 +12,9 @@ import (
 func TestConvert(t *testing.T) {
 	const N = 100000
 	tmp := t.TempDir()
-	db1, err := Open(filepath.Join(tmp, "1.db"), nil)
+	db1, err := Open(context.Background(), filepath.Join(tmp, "1.db"), nil)
 	db1.SetMarshaler(genh.MarshalMsgpack, genh.UnmarshalMsgpack)
-	db2 := NewSegDB(filepath.Join(tmp, "2"), ".db", nil, 32)
+	db2 := NewSegDB(context.Background(), filepath.Join(tmp, "2"), ".db", nil, 32)
 
 	if err != nil {
 		t.Fatal(err)

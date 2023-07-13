@@ -1,6 +1,8 @@
 package mbbolt
 
 import (
+	"context"
+	"errors"
 	"log"
 	"os"
 	"reflect"
@@ -36,7 +38,7 @@ type dbTest struct {
 
 func TestDB(t *testing.T) {
 	tmp := t.TempDir()
-	db, err := Open(tmp+"/x.db", nil)
+	db, err := Open(context.Background(), tmp+"/x.db", nil)
 	dieIf(t, err)
 	defer db.Close()
 	defer os.Remove(tmp + "/x.db")
@@ -86,7 +88,7 @@ func putGet(tb testing.TB, db *DB, t dbTest) {
 
 func TestSlow(t *testing.T) {
 	tmp := t.TempDir()
-	db, err := Open(tmp+"/x.db", nil)
+	db, err := Open(context.Background(), tmp+"/x.db", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +104,7 @@ func TestSlow(t *testing.T) {
 
 func TestCachedBucket(t *testing.T) {
 	tmp := t.TempDir()
-	db, err := Open(tmp+"/x.db", nil)
+	db, err := Open(context.Background(), tmp+"/x.db", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -138,17 +140,22 @@ func TestCachedBucket(t *testing.T) {
 			t.Fatalf("v != 0")
 		}
 	}
+}
 
-	// hit, miss, errs := cb.Stats()
-	// if hit != 10 {
-	// 	t.Fatalf("expected 10 hits, got %v", hit)
-	// }
-	// if miss != 111 {
-	// 	t.Fatalf("expected 111 misses, got %v", miss)
-	// }
-	// if errs != 10 {
-	// 	t.Fatalf("expected 10 errors, got %v", errs)
-	// }
+func TestCanceledCtx(t *testing.T) {
+	ctx, cfn := context.WithCancel(context.Background())
+	tmp := t.TempDir()
+	db, err := Open(ctx, tmp+"/x.db", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	cfn() // cancel the context
+
+	if err := db.Put("x", "x", "x"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("unexpected err: %v", err)
+	}
 }
 
 func slowTest(db *DB) {
