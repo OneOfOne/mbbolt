@@ -1,6 +1,7 @@
 package mbbolt
 
 import (
+	"context"
 	"strconv"
 	"sync"
 	"testing"
@@ -17,7 +18,7 @@ func TestMultiRace(t *testing.T) {
 		i := i
 		go func() {
 			defer wg.Done()
-			mdb.MustGet("test"+strconv.Itoa(i%3), nil)
+			mdb.MustGet(context.Background(), "test"+strconv.Itoa(i%3), nil)
 		}()
 	}
 	wg.Wait()
@@ -34,7 +35,7 @@ func TestMultiBackupRestore(t *testing.T) {
 		i := i
 		go func() {
 			defer wg.Done()
-			mdb.MustGet("test"+strconv.Itoa(i%3), nil).Put("bucket", "key", i)
+			mdb.MustGet(context.Background(), "test"+strconv.Itoa(i%3), nil).Put("bucket", "key", i)
 		}()
 	}
 	wg.Wait()
@@ -45,7 +46,7 @@ func TestMultiBackupRestore(t *testing.T) {
 	mdb.Close()
 	mdb.m = make(map[string]*DB)
 	t.Logf("buf size: %d", buf.Len())
-	if err := mdb.Restore(&buf); err != nil {
+	if err := mdb.Restore(context.Background(), &buf); err != nil {
 		t.Fatal(err)
 	}
 	if len(mdb.m) != 3 {

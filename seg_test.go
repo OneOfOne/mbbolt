@@ -1,6 +1,7 @@
 package mbbolt
 
 import (
+	"context"
 	"path/filepath"
 	"strconv"
 	"sync"
@@ -10,9 +11,9 @@ import (
 func TestSegDB(t *testing.T) {
 	t.Run("OpenCloseLeak", func(t *testing.T) {
 		d := t.TempDir()
-		seg := NewSegDB(d, ".db", nil, 32)
+		seg := NewSegDB(context.Background(), d, ".db", nil, 32)
 		seg.Close()
-		seg = NewSegDB(d, ".db", nil, 32)
+		seg = NewSegDB(context.Background(), d, ".db", nil, 32)
 		defer seg.Close()
 	})
 	t.Run("SegmentFn", func(t *testing.T) {
@@ -30,7 +31,7 @@ func TestSegDB(t *testing.T) {
 
 func TestSegBackupRestore(t *testing.T) {
 	tmp := t.TempDir()
-	sdb := NewSegDB(tmp, ".db", nil, 32)
+	sdb := NewSegDB(context.Background(), tmp, ".db", nil, 32)
 	defer sdb.Close()
 	var wg sync.WaitGroup
 	for i := 0; i < 10000; i++ {
@@ -50,7 +51,7 @@ func TestSegBackupRestore(t *testing.T) {
 	if err := sdb.Close(); err != nil {
 		t.Fatal(err)
 	}
-	sdb, err := NewSegDBFromFile(zfp, tmp, ".db", nil)
+	sdb, err := NewSegDBFromFile(context.Background(), zfp, tmp, ".db", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

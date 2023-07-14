@@ -1,6 +1,7 @@
 package mbbolt
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"log"
@@ -21,7 +22,9 @@ var (
 )
 
 type DB struct {
-	b           *BBoltDB
+	ctx context.Context
+	b   *BBoltDB
+
 	marshalFn   MarshalFn
 	unmarshalFn UnmarshalFn
 
@@ -265,6 +268,7 @@ func (db *DB) updateSlow(fn func(*Tx) error, su *slowUpdate, batch bool) (err er
 	} else {
 		err = db.b.Update(db.getTxFn(fn))
 	}
+
 	if took := time.Since(start); took >= su.min {
 		su.fn(frames, took)
 	}
@@ -274,6 +278,9 @@ func (db *DB) updateSlow(fn func(*Tx) error, su *slowUpdate, batch bool) (err er
 
 func (db *DB) getTxFn(fn func(*Tx) error) func(tx *BBoltTx) error {
 	return func(tx *BBoltTx) error {
+		if err := db.ctx.Err(); err != nil {
+			return err
+		}
 		return fn(&Tx{tx, db})
 	}
 }

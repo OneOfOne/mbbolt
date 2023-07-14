@@ -1,5 +1,7 @@
 package mbbolt
 
+import "context"
+
 type TxBase interface {
 	GetBytes(bucket, key string, clone bool) (out []byte)
 	ForEachBytes(bucket string, fn func(k, v []byte) error) error
@@ -10,13 +12,13 @@ type TxBase interface {
 
 var _ TxBase = (*Tx)(nil)
 
-func OpenTDB[T any](path string, opts *Options) (db TypedDB[T], err error) {
-	db.DB, err = Open(path, opts)
+func OpenTDB[T any](ctx context.Context, path string, opts *Options) (db TypedDB[T], err error) {
+	db.DB, err = Open(ctx, path, opts)
 	return
 }
 
-func OpenMultiTDB[T any](m *MultiDB, path string, opts *Options) (db TypedDB[T], err error) {
-	db.DB, err = m.Get(path, opts)
+func OpenMultiTDB[T any](ctx context.Context, m *MultiDB, path string, opts *Options) (db TypedDB[T], err error) {
+	db.DB, err = m.Get(ctx, path, opts)
 	return
 }
 

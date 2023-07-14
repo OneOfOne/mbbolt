@@ -46,6 +46,9 @@ func (tx *Tx) GetBytes(bucket, key string, clone bool) (out []byte) {
 }
 
 func (tx *Tx) PutBytes(bucket, key string, val []byte) error {
+	if err := tx.db.ctx.Err(); err != nil {
+		return err
+	}
 	if b := tx.MustBucket(bucket); b != nil {
 		return b.Put(unsafeBytes(key), val)
 	}
@@ -68,7 +71,7 @@ func (tx *Tx) Delete(bucket, key string) error {
 }
 
 func (tx *Tx) DeleteBucket(bucket string) error {
-	return tx.BBoltTx.DeleteBucket([]byte(bucket))
+	return tx.BBoltTx.DeleteBucket(unsafeBytes(bucket))
 }
 
 func (tx *Tx) GetAny(bucket, key string, out any, unmarshalFn UnmarshalFn) error {
@@ -85,6 +88,10 @@ func (tx *Tx) getAny(createBucket bool, bucket, key string, out any, unmarshalFn
 		if b = tx.Bucket(bucket); b == nil {
 			return ErrBucketNotFound
 		}
+	}
+
+	if err = tx.db.ctx.Err(); err != nil {
+		return
 	}
 
 	val := b.Get(unsafeBytes(key))
@@ -122,7 +129,12 @@ func (tx *Tx) PutAny(bucket, key string, val any, marshalFn MarshalFn) error {
 
 func (tx *Tx) ForEachBytes(bucket string, fn func(k, v []byte) error) error {
 	if b := tx.Bucket(bucket); b != nil {
-		return b.ForEach(fn)
+		return b.ForEach(func(k, v []byte) error {
+			if err := tx.db.ctx.Err(); err != nil {
+				return err
+			}
+			return fn(k, v)
+		})
 	}
 	return ErrBucketNotFound
 }
@@ -159,12 +171,18 @@ func (tx *Tx) ForEachUpdate(bucket string, fn func(k, v []byte, setValue func(k,
 	}
 
 	if err = b.ForEach(func(k, v []byte) error {
+		if err := tx.db.ctx.Err(); err != nil {
+			return err
+		}
 		return fn(k, v, setValue)
 	}); err != nil {
 		return
 	}
 
 	for k, v := range updateTable {
+		if err = tx.db.ctx.Err(); err != nil {
+			return
+		}
 		kb := unsafeBytes(k)
 		if v == nil {
 			err = b.Delete(kb)

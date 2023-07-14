@@ -2,6 +2,7 @@ package mbbolt
 
 import (
 	"archive/zip"
+	"context"
 	"fmt"
 	"hash/fnv"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"sync"
 
 	"go.oneofone.dev/genh"
+	"go.oneofone.dev/oerrs"
 	"go.oneofone.dev/otk"
 )
 
@@ -23,7 +25,7 @@ func DefaultSegmentByKey(key string) uint64 {
 // NewSegDB creates a new segmented database.
 // SegDB uses msgpack by default.
 // WARNING WARNING, if numSegments changes between calls, the keys will be out of sync
-func NewSegDB(prefix, ext string, opts *Options, numSegments int) *SegDB {
+func NewSegDB(ctx context.Context, prefix, ext string, opts *Options, numSegments int) *SegDB {
 	if numSegments < 1 {
 		log.Panic("numSegments < 1")
 	}
@@ -41,7 +43,7 @@ func NewSegDB(prefix, ext string, opts *Options, numSegments int) *SegDB {
 		i, name := i, fmt.Sprintf("%06d", i)
 		go func() {
 			defer wg.Done()
-			db := seg.mdb.MustGet(name, opts)
+			db := seg.mdb.MustGet(ctx, name, opts)
 			if opts == nil || opts.MarshalFn == nil {
 				db.SetMarshaler(genh.MarshalMsgpack, genh.UnmarshalMsgpack)
 			}
@@ -52,7 +54,7 @@ func NewSegDB(prefix, ext string, opts *Options, numSegments int) *SegDB {
 	return seg
 }
 
-func NewSegDBFromFile(fp, prefix, ext string, opts *Options) (_ *SegDB, err error) {
+func NewSegDBFromFile(ctx context.Context, fp, prefix, ext string, opts *Options) (_ *SegDB, err error) {
 	var f *os.File
 	if f, err = os.Open(fp); err != nil {
 		return
@@ -68,11 +70,13 @@ func NewSegDBFromFile(fp, prefix, ext string, opts *Options) (_ *SegDB, err erro
 	}); err != nil {
 		return
 	}
+
 	if segs == 0 {
-		err = fmt.Errorf("no files found")
+		err = oerrs.String("no files found")
 		return
 	}
-	return NewSegDB(prefix, ext, opts, segs), nil
+
+	return NewSegDB(ctx, prefix, ext, opts, segs), nil
 }
 
 type SegDB struct {
@@ -158,12 +162,12 @@ func (s *SegDB) Backup(w io.Writer) (int64, error) {
 	return s.mdb.Backup(w, nil)
 }
 
-func (s *SegDB) RestoreFromFile(fp string) error {
-	return s.mdb.RestoreFromFile(fp)
+func (s *SegDB) RestoreFromFile(ctx context.Context, fp string) error {
+	return s.mdb.RestoreFromFile(ctx, fp)
 }
 
-func (s *SegDB) Restore(r io.ReaderAt) error {
-	return s.mdb.Restore(r)
+func (s *SegDB) Restore(ctx context.Context, r io.ReaderAt) error {
+	return s.mdb.Restore(ctx, r)
 }
 
 func (s *SegDB) UseBatch(v bool) (old bool) {
