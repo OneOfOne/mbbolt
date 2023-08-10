@@ -30,9 +30,13 @@ func TestMultiRace(t *testing.T) {
 }
 
 func TestMultiBackupRestore(t *testing.T) {
+	opts := *DefaultOptions
+	opts.AutoRetry = true
+
 	tmp := t.TempDir()
-	mdb := NewMultiDB(tmp, ".db", nil)
+	mdb := NewMultiDB(tmp, ".db", &opts)
 	defer mdb.Close()
+
 	var wg sync.WaitGroup
 	for i := 0; i < 100; i++ {
 		wg.Add(1)
