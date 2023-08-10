@@ -120,6 +120,9 @@ type Options struct {
 
 	MarshalFn   MarshalFn
 	UnmarshalFn UnmarshalFn
+
+	// AutoRetry will keep retrying to open the db instead of returning a timeout error
+	AutoRetry bool
 }
 
 func (opts *Options) Clone() *Options {
@@ -251,6 +254,10 @@ func (mdb *MultiDB) Get(ctx context.Context, name string, opts *Options) (db *DB
 
 		if err == nil {
 			break
+		}
+
+		if !opts.AutoRetry {
+			return
 		}
 
 		time.Sleep(time.Millisecond * 10)

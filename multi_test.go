@@ -10,8 +10,12 @@ import (
 )
 
 func TestMultiRace(t *testing.T) {
-	mdb := NewMultiDB(t.TempDir(), ".db", nil)
+	opts := *DefaultOptions
+	opts.AutoRetry = true
+
+	mdb := NewMultiDB(t.TempDir(), ".db", &opts)
 	defer mdb.Close()
+
 	var wg sync.WaitGroup
 	for i := 0; i < 100; i++ {
 		wg.Add(1)
