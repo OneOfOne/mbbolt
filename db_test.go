@@ -44,6 +44,7 @@ func TestDB(t *testing.T) {
 	defer os.Remove(tmp + "/x.db")
 
 	ch := make(chan bool, 1)
+
 	db.OnSlowUpdate(time.Millisecond*10, func(frs *runtime.Frames, took time.Duration) {
 		close(ch)
 	})

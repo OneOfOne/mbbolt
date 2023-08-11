@@ -8,6 +8,7 @@ import (
 	"math/big"
 	"os"
 	"runtime"
+	"sync/atomic"
 	"time"
 
 	"go.etcd.io/bbolt"
@@ -29,29 +30,26 @@ type DB struct {
 	unmarshalFn UnmarshalFn
 
 	onClose func()
-	slow    *slowUpdate
+	slow    atomic.Pointer[slowUpdate]
 
 	useBatch genh.AtomicBool
 }
 
 func (db *DB) SetMarshaler(marshalFn MarshalFn, unmarshalFn UnmarshalFn) {
 	if marshalFn == nil || unmarshalFn == nil {
-		log.Panic(" marshalFn == nil || unmarshalFn == nil")
+		log.Panic("marshalFn == nil || unmarshalFn == nil")
 	}
 	db.marshalFn, db.unmarshalFn = marshalFn, unmarshalFn
 }
 
 func (db *DB) OnSlowUpdate(minDuration time.Duration, fn OnSlowUpdateFn) {
-	if db.slow != nil {
-		log.Panic("multiple calls")
-	}
 	if fn == nil || minDuration < time.Millisecond {
 		log.Panic("fn == nil || minDuration < time.Millisecond")
 	}
-	db.slow = &slowUpdate{
+	db.slow.Store(&slowUpdate{
 		fn:  fn,
 		min: minDuration,
-	}
+	})
 }
 
 func (db *DB) GetBytes(bucket, key string) (out []byte, err error) {
@@ -171,16 +169,16 @@ func (db *DB) View(fn func(*Tx) error) error {
 }
 
 func (db *DB) Update(fn func(*Tx) error) error {
-	if db.slow != nil {
-		return db.updateSlow(fn, db.slow, false)
+	if slow := db.slow.Load(); slow != nil {
+		return db.updateSlow(fn, slow, false)
 	}
 
 	return db.b.Update(db.getTxFn(fn))
 }
 
 func (db *DB) Batch(fn func(*Tx) error) error {
-	if db.slow != nil {
-		return db.updateSlow(fn, db.slow, true)
+	if slow := db.slow.Load(); slow != nil {
+		return db.updateSlow(fn, slow, true)
 	}
 	return db.b.Batch(db.getTxFn(fn))
 }
