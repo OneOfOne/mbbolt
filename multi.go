@@ -123,6 +123,9 @@ type Options struct {
 
 	// AutoRetry will keep retrying to open the db instead of returning a timeout error
 	AutoRetry bool
+
+	// Reload will try to close the db if it's already open then reopen it
+	Reload bool
 }
 
 func (opts *Options) Clone() *Options {
@@ -211,18 +214,13 @@ func (mdb *MultiDB) MustGet(ctx context.Context, name string, opts *Options) *DB
 
 func (mdb *MultiDB) Get(ctx context.Context, name string, opts *Options) (db *DB, err error) {
 	fp := mdb.getPath(name)
-	os.MkdirAll(filepath.Dir(fp), 0o755)
+	if err = os.MkdirAll(filepath.Dir(fp), 0o755); err != nil {
+		return
+	}
 
 	if err = ctx.Err(); err != nil {
 		return
 	}
-
-	mdb.mux.RLock()
-	if db = mdb.m[name]; db != nil {
-		mdb.mux.RUnlock()
-		return
-	}
-	mdb.mux.RUnlock()
 
 	if opts == nil {
 		opts = mdb.opts
@@ -230,6 +228,20 @@ func (mdb *MultiDB) Get(ctx context.Context, name string, opts *Options) (db *DB
 
 	if opts == nil {
 		opts = DefaultOptions
+	}
+
+	mdb.mux.RLock()
+	db = mdb.m[name]
+	mdb.mux.RUnlock()
+
+	if db != nil {
+		if !opts.Reload {
+			return
+		}
+
+		if err, db = db.Close(), nil; err != nil {
+			return
+		}
 	}
 
 	var bdb *BBoltDB

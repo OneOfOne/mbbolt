@@ -40,8 +40,8 @@ func TestDB(t *testing.T) {
 	tmp := t.TempDir()
 	db, err := Open(context.Background(), tmp+"/x.db", nil)
 	dieIf(t, err)
-	defer db.Close()
 	defer os.Remove(tmp + "/x.db")
+	defer db.Close()
 
 	ch := make(chan bool, 1)
 
@@ -68,6 +68,18 @@ func TestDB(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 		return nil
 	})
+
+	opts := *DefaultOptions
+	opts.Reload = true
+	oldDB := db
+	if db, err = Open(context.Background(), tmp+"/x.db", &opts); err != nil {
+		t.Fatal(err)
+	}
+
+	if oldDB == db {
+		t.Fatal("expected a new db, got the same one")
+	}
+
 	select {
 	case <-ch:
 		t.Log("slow updated called successfully")
